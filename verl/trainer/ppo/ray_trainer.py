@@ -254,6 +254,7 @@ def compute_data_metrics(batch, use_critic=True):
         'prompt_length/clip_ratio':
             torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
     }
+    print(f"critic/score/mean: {metrics['critic/score/mean']}")
     return metrics
 
 
@@ -438,6 +439,8 @@ class RayPPOTrainer(object):
         metric_dict = {}
         for data_source, rewards in data_source_reward.items():
             metric_dict[f'val/test_score/{data_source}'] = np.mean(rewards)
+
+        print(metric_dict)
 
         return metric_dict
 

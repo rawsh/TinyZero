@@ -159,6 +159,16 @@ class ActorRolloutRefWorker(Worker):
         # NOTE(fix me): tie_word_embedding causes meta_tensor init to hang
         init_context = get_init_weight_context_manager(use_meta_tensor=not actor_model_config.tie_word_embeddings)
 
+        # Apply Liger kernel optimizations to Qwen2 model
+        from liger_kernel.transformers import apply_liger_kernel_to_qwen2
+        apply_liger_kernel_to_qwen2(
+            rope=False,
+            cross_entropy=False,
+            fused_linear_cross_entropy=True,
+            rms_norm=True,
+            swiglu=True
+        )
+
         with init_context(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
             actor_module = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path=local_path,
@@ -581,6 +591,16 @@ class CriticWorker(Worker):
             from verl.models.transformers.monkey_patch import apply_monkey_patch
             apply_monkey_patch(critic_model_config, verbose=True)
 
+        # Apply Liger kernel optimizations to Qwen2 model
+        from liger_kernel.transformers import apply_liger_kernel_to_qwen2
+        apply_liger_kernel_to_qwen2(
+            rope=False,
+            cross_entropy=False,
+            fused_linear_cross_entropy=True,
+            rms_norm=True,
+            swiglu=True
+        )
+
         init_context = get_init_weight_context_manager()
         with init_context(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -823,15 +843,25 @@ class RewardModelWorker(Worker):
         # note that we have to create model in fp32. Otherwise, the optimizer is in bf16, which is incorrect
         init_context = get_init_weight_context_manager(use_meta_tensor=not model_config.tie_word_embeddings)
 
+        # Apply Liger kernel optimizations to Qwen2 model
+        from liger_kernel.transformers import apply_liger_kernel_to_qwen2
+        apply_liger_kernel_to_qwen2(
+            rope=False,
+            cross_entropy=False,
+            fused_linear_cross_entropy=True,
+            rms_norm=True,
+            swiglu=True
+        )
+
         with init_context(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
             setattr(model_config, 'classifier_dropout', 0.)
             reward_module = AutoModelForTokenClassification.from_pretrained(pretrained_model_name_or_path=local_path,
                                                                             config=model_config,
-                                                                            torch_dtype=torch.bfloat16,
+                                                                            torch_dtype=torch.float32,
                                                                             attn_implementation='flash_attention_2',
                                                                             trust_remote_code=trust_remote_code)
-            reward_module.to(torch.bfloat16)
+            reward_module.to(torch.float32)
         auto_wrap_policy = get_fsdp_wrap_policy(module=reward_module, config=self.config.model.fsdp_config)
 
         reward_module = FSDP(
