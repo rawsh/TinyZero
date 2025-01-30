@@ -15,10 +15,80 @@
 Note that we don't combine the main with ray_trainer as ray_trainer is used by other main.
 """
 
-from verl.trainer.mp_rewards import RewardManager
+# from verl.trainer.mp_rewards import RewardManager
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 import ray
 import hydra
+
+
+import torch
+import statistics
+from verl import DataProto
+
+
+# hybrid
+from verl.utils.reward_score.prime import compute_score
+class RewardManager():
+    """The reward manager with batched reward computation.
+    """
+    def __init__(self, tokenizer, num_examine, verifier_func=compute_score) -> None:
+        self.tokenizer = tokenizer
+        self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
+        self.verifier_func = verifier_func
+
+    def __call__(self, data: DataProto):
+        """We will expand this function gradually based on the available datasets"""
+
+        # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
+        if 'rm_scores' in data.batch.keys():
+            return data.batch['rm_scores']
+
+        reward_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.float32)
+        
+        # Pre-processing loop - collect responses and ground truths
+        response_ids = data.batch['responses']
+        response_str = self.tokenizer.batch_decode(response_ids, skip_special_tokens=True)
+        ground_truth_list = []
+        tasks_list = []
+        valid_lengths = []
+        already_print_data_sources = {}
+
+        for i in range(len(data)):
+            data_item = data[i]  # DataProtoItem
+            
+            # Get valid response length for reward positioning
+            prompt_length = data_item.batch['prompts'].shape[-1]
+            valid_response_length = data_item.batch['attention_mask'][prompt_length:].sum()
+            valid_lengths.append(valid_response_length)
+            
+            ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
+            ground_truth_list.append(ground_truth)
+            
+            tasks_list.append(data_item.non_tensor_batch['ability'])
+
+            # Handle printing logic
+            data_source = data_item.non_tensor_batch['data_source']
+            if data_source not in already_print_data_sources:
+                already_print_data_sources[data_source] = 0
+
+            if already_print_data_sources[data_source] < self.num_examine:
+                already_print_data_sources[data_source] += 1
+                # print full example
+                example = data.batch[i]['input_ids']
+                print(self.tokenizer.decode(example, skip_special_tokens=True))
+
+        # Batch computation of rewards
+        scores = self.verifier_func(
+            completions=response_str,  # Using just response strings
+            references=ground_truth_list,
+            tasks=tasks_list
+        )
+
+        # Post-processing loop - assign scores to reward tensor
+        for i, (score, valid_length) in enumerate(zip(scores, valid_lengths)):
+            reward_tensor[i, valid_length - 1] = score
+
+        return reward_tensor
 
 
 @hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
@@ -98,7 +168,7 @@ def main_task(config):
         role_worker_mapping[Role.RewardModel] = ray.remote(RewardModelWorker)
         mapping[Role.RewardModel] = global_pool_id
 
-    reward_fn = RewardManager(tokenizer=tokenizer, num_examine=0)
+    reward_fn = RewardManager(tokenizer=tokenizer, num_examine=1)
 
     # Note that we always use function-based RM for validation
     val_reward_fn = RewardManager(tokenizer=tokenizer, num_examine=1)

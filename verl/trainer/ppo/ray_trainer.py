@@ -440,6 +440,7 @@ class RayPPOTrainer(object):
         for data_source, rewards in data_source_reward.items():
             metric_dict[f'val/test_score/{data_source}'] = np.mean(rewards)
 
+        metric_dict[f'val/test_score/all'] = reward_tensor.mean().item()
         print(metric_dict)
 
         return metric_dict
